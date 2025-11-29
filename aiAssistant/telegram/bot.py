@@ -503,6 +503,117 @@ def _should_refresh_cache(user_message: str) -> bool:
     return any(keyword in user_lower for keyword in refresh_keywords)
 
 
+def refresh_last_query(user_id: int, username: str, context_manager: ContextManager) -> str:
+    """
+    Обновляет последний запрос: берет параметры из кеша, выполняет запрос заново в БД и обновляет результат в кеше.
+    
+    Args:
+        user_id: ID пользователя
+        username: Username пользователя для БД
+        context_manager: Менеджер контекста
+    
+    Returns:
+        Текстовое сообщение для пользователя
+    """
+    last_query = context_manager.get_last_query(user_id)
+    
+    # Если запроса нет в кеше, используем запрос по умолчанию "за текущий месяц"
+    if not last_query:
+        start_date, end_date = get_current_month()
+        result = ai_db.get_grouped_stats("category1", start_date, end_date, username)
+        context_manager.set_last_query(
+            user_id,
+            "get_grouped_by_category1",
+            {"start_date": start_date, "end_date": end_date, "field": "category1"},
+            result,
+            username,
+        )
+        return f"✅ Обновлен запрос по умолчанию (группировка по категориям за текущий месяц). Найдено групп: {len(result)}"
+    
+    query_type = last_query.get("type", "")
+    params = last_query.get("params", {})
+    query_username = last_query.get("username", username)
+    
+    result = []
+    message = ""
+    
+    # Обработка различных типов запросов
+    if query_type.startswith("get_grouped_by_"):
+        # Определяем поле для группировки
+        field_map = {
+            "get_grouped_by_category1": "category1",
+            "get_grouped_by_category2": "category2",
+            "get_grouped_by_category3": "category3",
+            "get_grouped_by_organization": "organization",
+            "get_grouped_by_description": "description"
+        }
+        field = field_map.get(query_type, params.get("field", "category1"))
+        start_date = params.get("start_date")
+        end_date = params.get("end_date")
+        
+        if not start_date or not end_date:
+            start_date, end_date = get_current_month()
+        
+        result = ai_db.get_grouped_stats(field, start_date, end_date, query_username)
+        context_manager.set_last_query(
+            user_id,
+            query_type,
+            {"start_date": start_date, "end_date": end_date, "field": field},
+            result,
+            query_username,
+        )
+        message = f"✅ Обновлен запрос группировки по '{field}' за период {start_date} - {end_date}. Найдено групп: {len(result)}"
+    
+    elif query_type == "fetch_by_period":
+        start_date = params.get("start_date")
+        end_date = params.get("end_date")
+        
+        if not start_date or not end_date:
+            start_date, end_date = get_current_month()
+        
+        result = ai_db.fetch_by_period(start_date, end_date, query_username)
+        context_manager.set_last_query(
+            user_id,
+            "fetch_by_period",
+            {"start_date": start_date, "end_date": end_date},
+            result,
+            query_username,
+        )
+        message = f"✅ Обновлен запрос за период {start_date} - {end_date}. Найдено записей: {len(result)}"
+    
+    elif query_type == "summary_period":
+        start_date = params.get("start_date")
+        end_date = params.get("end_date")
+        
+        if not start_date or not end_date:
+            start_date, end_date = get_current_month()
+        
+        result = ai_db.get_summary(start_date, end_date, query_username)
+        context_manager.set_last_query(
+            user_id,
+            "summary_period",
+            {"start_date": start_date, "end_date": end_date},
+            result,
+            query_username,
+        )
+        message = f"✅ Обновлена сводка за период {start_date} - {end_date}. Найдено записей: {len(result) if isinstance(result, list) else 1}"
+    
+    else:
+        # Для неизвестных типов запросов используем запрос по умолчанию
+        start_date, end_date = get_current_month()
+        result = ai_db.get_grouped_stats("category1", start_date, end_date, query_username)
+        context_manager.set_last_query(
+            user_id,
+            "get_grouped_by_category1",
+            {"start_date": start_date, "end_date": end_date, "field": "category1"},
+            result,
+            query_username,
+        )
+        message = f"✅ Обновлен запрос (тип '{query_type}' не поддерживается, использован запрос по умолчанию). Найдено групп: {len(result)}"
+    
+    return message
+
+
 def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: int, user_message: str = "", need_excel: bool = False, need_chart: bool = False) -> tuple[str, list, dict]:
     try:
         if "username" not in arguments:
@@ -858,20 +969,37 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
                     safe_args["value"] = v
             except Exception:
                 pass
+            # First try: update by internal record ID
             success = ai_db.update_record(**safe_args)
             if success:
                 return report_builder.format_update_result(True, 1), photos_to_send, extra_outputs
-            # Fallback: treat record_id as chequeid for this user
+            
+            # Fallback: treat record_id as position number in the last viewed cheque
             try:
-                chequeid = int(safe_args.get("record_id")) if safe_args.get("record_id") is not None else None
+                position_num = int(safe_args.get("record_id")) if safe_args.get("record_id") is not None else None
             except Exception:
-                chequeid = None
-            if chequeid:
-                exists = ai_db.get_cheque_by_id(chequeid, username)
-                if exists:
-                    rows = ai_db.update_field_by_cheque(chequeid=chequeid, field=safe_args.get("field"), value=safe_args.get("value"), username=username)
-                    if rows > 0:
-                        return report_builder.format_update_result(True, rows), photos_to_send, extra_outputs
+                position_num = None
+            
+            if position_num and position_num > 0:
+                # Get last viewed cheque for this user
+                last_chequeid = context_manager.get_last_cheque(user_id)
+                if not last_chequeid:
+                    # Try to get max chequeid as fallback
+                    last_chequeid = ai_db.get_max_chequeid(username)
+                
+                if last_chequeid:
+                    # Get all records from the cheque
+                    cheque_records = ai_db.get_cheque_by_id(last_chequeid, username)
+                    if cheque_records and len(cheque_records) >= position_num:
+                        # Position numbers are 1-based, so subtract 1 for index
+                        target_record = cheque_records[position_num - 1]
+                        record_id = target_record.get("id")
+                        if record_id:
+                            # Update the specific record by its internal ID
+                            success = ai_db.update_record(record_id=record_id, field=safe_args.get("field"), value=safe_args.get("value"))
+                            if success:
+                                return report_builder.format_update_result(True, 1), photos_to_send, extra_outputs
+            
             return report_builder.format_update_result(False, 0), photos_to_send, extra_outputs
         
         elif tool_name == "update_field_by_cheque":
@@ -2043,6 +2171,21 @@ async def handle_text(message: Message):
     
     pending = context_manager.get_pending_cheque(user_id)
     user_lower = user_message.lower()
+    
+    # Обработка команды обновления последнего запроса
+    refresh_commands = [
+        "обнови последний запрос",
+        "обновить последний запрос",
+        "пересчитай последний запрос",
+        "пересчитать последний запрос",
+        "обнови запрос",
+        "обновить запрос"
+    ]
+    if any(cmd in user_lower for cmd in refresh_commands):
+        response = refresh_last_query(user_id, username, context_manager)
+        context_manager.add_message(user_id, "assistant", response)
+        await message.answer(response, parse_mode=None)
+        return
     
     # Обработка команды объединения групп категорий
     merge_match = re.search(

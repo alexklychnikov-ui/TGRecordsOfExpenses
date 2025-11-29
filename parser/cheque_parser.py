@@ -35,6 +35,7 @@ def parse_cheque_with_gpt(
 ) -> List[Dict]:
     try:
         from openai import OpenAI  # lazy import to keep deps minimal for non-parse flows
+        from openai import APIError, APITimeoutError, APIConnectionError, RateLimitError
     except Exception as exc:
         raise RuntimeError("openai package is required for parsing") from exc
 
@@ -80,14 +81,26 @@ def parse_cheque_with_gpt(
         
         user_content = (hint_text + "\n\n" if hint_text else "") + text_receipt
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=0.1,
-        )
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.1,
+            )
+        except APIConnectionError as e:
+            raise RuntimeError("Проблема с подключением. Проверьте интернет и попробуйте снова") from e
+        except APITimeoutError as e:
+            raise RuntimeError("Запрос занял слишком много времени. Попробуйте ещё раз позже") from e
+        except RateLimitError as e:
+            raise RuntimeError("Слишком много запросов. Подождите немного и попробуйте снова") from e
+        except APIError as e:
+            error_str = str(e).lower()
+            if "connection" in error_str or "network" in error_str:
+                raise RuntimeError("Проблема с подключением. Проверьте интернет и попробуйте снова") from e
+            raise RuntimeError(f"Ошибка API: {str(e)}") from e
     else:
         image_b64 = _read_file_as_base64(image_path)
         mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
@@ -98,22 +111,34 @@ def parse_cheque_with_gpt(
         if hint_text:
             user_text += "\n\nПодсказка: " + hint_text
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_text},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime};base64,{image_b64}"},
-                        },
-                    ],
-                },
-            ],
-        )
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": user_text},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime};base64,{image_b64}"},
+                            },
+                        ],
+                    },
+                ],
+            )
+        except APIConnectionError as e:
+            raise RuntimeError("Проблема с подключением. Проверьте интернет и попробуйте снова") from e
+        except APITimeoutError as e:
+            raise RuntimeError("Запрос занял слишком много времени. Попробуйте ещё раз позже") from e
+        except RateLimitError as e:
+            raise RuntimeError("Слишком много запросов. Подождите немного и попробуйте снова") from e
+        except APIError as e:
+            error_str = str(e).lower()
+            if "connection" in error_str or "network" in error_str:
+                raise RuntimeError("Проблема с подключением. Проверьте интернет и попробуйте снова") from e
+            raise RuntimeError(f"Ошибка API: {str(e)}") from e
 
     content = response.choices[0].message.content
     # Try to extract JSON if model wrapped it in code fences
