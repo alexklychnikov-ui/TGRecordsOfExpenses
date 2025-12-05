@@ -1,6 +1,7 @@
 """Helper functions for date calculations."""
 from datetime import datetime, timedelta
 import calendar
+import re
 
 
 def get_last_n_days(n: int) -> tuple[str, str]:
@@ -107,22 +108,21 @@ def parse_period_string(period: str) -> tuple[str, str] | None:
     """Парсит строки типа 'за неделю', 'за 7 дней', 'за октябрь'."""
     period_lower = period.lower().strip()
     
-    if "вчера" in period_lower or "вчераш" in period_lower or ("прошл" in period_lower and "день" in period_lower) or "last day" in period_lower or "yesterday" in period_lower:
+    if "вчера" in period_lower or "вчераш" in period_lower or ("прошл" in period_lower and re.search(r"дн(я|ей|и|ём|ем|ень)", period_lower)) or "last day" in period_lower or "yesterday" in period_lower:
         return get_yesterday()
     
     if "недел" in period_lower or "week" in period_lower:
         return get_current_week()
     
-    if "прошл" in period_lower and ("месяц" in period_lower or "month" in period_lower):
+    if "прошл" in period_lower and (re.search(r"месяц|месяч|месяц[а-я]*", period_lower) or "month" in period_lower):
         return get_previous_month()
     
-    if "прошл" in period_lower and ("год" in period_lower or "year" in period_lower):
+    if "прошл" in period_lower and (re.search(r"год|года|году|годом|лет", period_lower) or "year" in period_lower):
         return get_previous_year()
     
-    if "месяц" in period_lower or "month" in period_lower:
+    if re.search(r"месяц|месяч|месяц[а-я]*", period_lower) or "month" in period_lower:
         return get_current_month()
     
-    import re
     days_match = re.search(r'(\d+)\s*дн', period_lower)
     if days_match:
         n = int(days_match.group(1))
@@ -144,7 +144,6 @@ def parse_period_string(period: str) -> tuple[str, str] | None:
             if int(year) == now.year and int(month_num) == now.month:
                 end = now.strftime("%d.%m.%Y")
             else:
-                import calendar
                 last_day = calendar.monthrange(int(year), int(month_num))[1]
                 end = f"{last_day}.{month_num}.{year}"
             return start, end

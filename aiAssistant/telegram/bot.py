@@ -1021,7 +1021,7 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
             start_date = arguments.get("start_date")
             end_date = arguments.get("end_date")
             if start_date and end_date:
-                start_date, end_date = normalize_period_to_current_month(start_date, end_date)
+                start_date, end_date = normalize_to_current_month_if_same_month_wrong_year(start_date, end_date)
             else:
                 start_date, end_date = resolve_period_for_message(user_id, user_message)
             result = []
@@ -1057,7 +1057,7 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
             start_date = arguments.get("start_date")
             end_date = arguments.get("end_date")
             if start_date and end_date:
-                start_date, end_date = normalize_period_to_current_month(start_date, end_date)
+                start_date, end_date = normalize_to_current_month_if_same_month_wrong_year(start_date, end_date)
             else:
                 start_date, end_date = resolve_period_for_message(user_id, user_message)
             result = []
@@ -1092,7 +1092,7 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
             start_date = arguments.get("start_date")
             end_date = arguments.get("end_date")
             if start_date and end_date:
-                start_date, end_date = normalize_period_to_current_month(start_date, end_date)
+                start_date, end_date = normalize_to_current_month_if_same_month_wrong_year(start_date, end_date)
             else:
                 start_date, end_date = resolve_period_for_message(user_id, user_message)
             result = []
@@ -1127,7 +1127,7 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
             start_date = arguments.get("start_date")
             end_date = arguments.get("end_date")
             if start_date and end_date:
-                start_date, end_date = normalize_period_to_current_month(start_date, end_date)
+                start_date, end_date = normalize_to_current_month_if_same_month_wrong_year(start_date, end_date)
             else:
                 start_date, end_date = resolve_period_for_message(user_id, user_message)
             result = []
@@ -1162,7 +1162,7 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
             start_date = arguments.get("start_date")
             end_date = arguments.get("end_date")
             if start_date and end_date:
-                start_date, end_date = normalize_period_to_current_month(start_date, end_date)
+                start_date, end_date = normalize_to_current_month_if_same_month_wrong_year(start_date, end_date)
             else:
                 start_date, end_date = resolve_period_for_message(user_id, user_message)
             result = []
@@ -1199,7 +1199,7 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
             end_date = arguments.get("end_date")
             filters = arguments.get("filters", {})
             if start_date and end_date:
-                start_date, end_date = normalize_period_to_current_month(start_date, end_date)
+                start_date, end_date = normalize_to_current_month_if_same_month_wrong_year(start_date, end_date)
             else:
                 start_date, end_date = resolve_period_for_message(user_id, user_message)
             result = []
@@ -1354,7 +1354,7 @@ async def handle_photo(message: Message):
         local_path = os.path.join(user_dir, f"cheque_{ts}.jpg")
         await asyncio.wait_for(bot.download_file(file.file_path, local_path), timeout=45)
     except asyncio.TimeoutError:
-        await message.answer("⏰ Не удалось скачать фото от Telegram (таймаут)")
+        await message.answer("⏰ Превышено время ожидания при скачивании фото. Возможно, проблемы с сетью или файл слишком большой. Попробуйте отправить фото ещё раз.")
         return
     except Exception as e:
         await message.answer(f"⚠️ Ошибка скачивания фото: {e}")
@@ -1365,7 +1365,7 @@ async def handle_photo(message: Message):
         done, pending = await asyncio.wait({parse_task}, timeout=120)
         if not done:
             logger.warning("Parse timeout (photo)")
-            await message.answer("⏰ Превышено время распознавания. Попробуйте ещё раз позже")
+            await message.answer("⏰ Превышено время распознавания чека (более 2 минут). Возможно, чек слишком сложный или сервер перегружен. Попробуйте:\n• Отправить более чёткое фото\n• Повторить через несколько секунд")
             try:
                 os.remove(local_path)
             except Exception:
@@ -1432,7 +1432,7 @@ async def handle_document(message: Message):
         local_path = os.path.join(user_dir, f"cheque_{ts}{ext}")
         await asyncio.wait_for(bot.download_file(file.file_path, local_path), timeout=45)
     except asyncio.TimeoutError:
-        await message.answer("⏰ Не удалось скачать документ от Telegram (таймаут)")
+        await message.answer("⏰ Превышено время ожидания при скачивании документа. Возможно, проблемы с сетью или файл слишком большой. Попробуйте отправить документ ещё раз.")
         return
     except Exception as e:
         await message.answer(f"⚠️ Ошибка скачивания документа: {e}")
@@ -1443,7 +1443,7 @@ async def handle_document(message: Message):
         done, pending = await asyncio.wait({parse_task}, timeout=120)
         if not done:
             logger.warning("Parse timeout (document)")
-            await message.answer("⏰ Превышено время распознавания. Попробуйте ещё раз позже")
+            await message.answer("⏰ Превышено время распознавания чека (более 2 минут). Возможно, документ слишком сложный или сервер перегружен. Попробуйте:\n• Отправить более качественный документ\n• Повторить через несколько секунд")
             try:
                 os.remove(local_path)
             except Exception:
@@ -2501,8 +2501,36 @@ async def handle_text(message: Message):
         await message.answer(final_response, parse_mode=None)
         return
     
+    # Явный запрос группировки по category1 (без уточнения category2) - проверяем ПЕРВЫМ
+    has_category = ("категор" in user_lower or "category" in user_lower)
+    has_category1 = (re.search(r"категор\w*\s*1", user_lower) or "category1" in user_lower)
+    has_stats_keyword = ("статист" in user_lower or "групп" in user_lower or "итог" in user_lower)
+    
+    if has_category and has_category1 and has_stats_keyword:
+        start_date, end_date = resolve_period_for_message(user_id, user_message)
+        start_date, end_date = normalize_to_current_month_if_same_month_wrong_year(start_date, end_date)
+        result = ai_db.get_grouped_stats("category1", start_date, end_date, username)
+        context_manager.set_last_query(
+            user_id,
+            "get_grouped_by_category1",
+            {"start_date": start_date, "end_date": end_date, "field": "category1"},
+            result,
+            username,
+        )
+        if result:
+            final_response = (
+                f"📊 Группировка по category1 за период {start_date} - {end_date}:\n\n"
+                f"{report_builder.format_grouped_stats(result, 'category1')}"
+            )
+        else:
+            final_response = f"Нет данных по category1 за период {start_date} - {end_date}"
+        context_manager.add_message(user_id, "assistant", final_response)
+        await message.answer(final_response, parse_mode=None)
+        return
+    
+    # Обработка запросов с указанием конкретного значения category1 (для группировки category2)
     grouped_category_match = re.search(
-        r"покажи.*категор(?:ия|и)2.*категор(?:ия|и)1\s+(.+)",
+        r"покажи.*категор(?:ия|и|ий|ию|ией)2.*категор(?:ия|и|ий|ию|ией)1\s+(.+)",
         user_message,
         flags=re.IGNORECASE | re.DOTALL,
     )
@@ -2513,13 +2541,20 @@ async def handle_text(message: Message):
         category1_value = category1_value.strip(' "\'«»')
     elif (
         ("категор" in user_lower or "category" in user_lower)
-        and ("категория1" in user_lower or "category1" in user_lower)
+        and (re.search(r"категор\w*\s*1", user_lower) or "category1" in user_lower)
+        and not ("статист" in user_lower or "групп" in user_lower or "итог" in user_lower)
     ):
         idx = user_lower.rfind("категория1")
         key_len = len("категория1")
         if idx == -1:
             idx = user_lower.rfind("category1")
             key_len = len("category1")
+        if idx == -1:
+            # попробуем найти по regex катеgor* 1
+            regex_match = re.search(r"категор\w*\s*1", user_lower)
+            if regex_match:
+                idx = regex_match.end()
+                key_len = 0
         if idx != -1:
             value_part = user_message[idx + key_len :]
             value_part = value_part.replace("=", " ").replace(":", " ")
@@ -2582,11 +2617,11 @@ async def handle_text(message: Message):
     messages = [{"role": "system", "content": context_manager.get_system_prompt()}]
     messages.extend(context_manager.get_messages(user_id))
     
-    if any(keyword in user_lower for keyword in ("вчера", "вчераш", "last day", "yesterday", "прошлый день")):
+    if any(keyword in user_lower for keyword in ("вчера", "вчераш", "last day", "yesterday")) or re.search(r"прошл\w*\s+дн", user_lower):
         messages.append({"role": "system", "content": "Для запроса пользователя используй функцию get_yesterday()."})
-    elif ("прошл" in user_lower and ("месяц" in user_lower or "month" in user_lower)) or "last month" in user_lower:
+    elif ("прошл" in user_lower and (re.search(r"месяц|месяч|месяц[а-я]*", user_lower) or "month" in user_lower)) or "last month" in user_lower:
         messages.append({"role": "system", "content": "Для запроса пользователя используй функцию get_previous_month()."})
-    elif ("прошл" in user_lower and ("год" in user_lower or "year" in user_lower)) or "last year" in user_lower:
+    elif ("прошл" in user_lower and (re.search(r"год|года|году|годом|лет", user_lower) or "year" in user_lower)) or "last year" in user_lower:
         messages.append({"role": "system", "content": "Для запроса пользователя используй функцию get_previous_year()."})
     
     tools = ai_client.get_tools_definition()
@@ -2598,7 +2633,7 @@ async def handle_text(message: Message):
         )
     except asyncio.TimeoutError:
         logger.error("AI response timeout (60s)")
-        error_message = "Запрос занял слишком много времени. Попробуйте упростить запрос или повторить позже"
+        error_message = "⏰ Запрос обрабатывается слишком долго. Возможно, сервер перегружен или запрос слишком сложный. Попробуйте:\n• Упростить запрос\n• Разбить на несколько частей\n• Повторить через несколько секунд"
         context_manager.add_message(user_id, "assistant", error_message)
         await message.answer(error_message, parse_mode=None)
         return
