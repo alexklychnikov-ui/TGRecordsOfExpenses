@@ -72,10 +72,16 @@ def fetch_by_category(level: int, name: str, username: str, db_path: Optional[st
 
 
 def fetch_by_organization(organization: str, username: str, db_path: Optional[str] = None) -> List[Dict]:
+    org = (organization or "").strip()
+    variants = {org, org.lower(), org.upper(), org.title()}
+    likes = [f"%{v}%" for v in variants if v]
+    if not likes:
+        return []
+    placeholders = " OR ".join(["organization LIKE ?"] * len(likes))
     with get_connection(db_path) as conn:
         cur = conn.execute(
-            "SELECT * FROM purchases WHERE organization = ? AND username = ? ORDER BY date DESC",
-            (organization, username)
+            f"SELECT * FROM purchases WHERE username = ? AND ({placeholders}) ORDER BY date DESC",
+            (username, *likes),
         )
         rows = cur.fetchall()
         columns = [desc[0] for desc in cur.description]

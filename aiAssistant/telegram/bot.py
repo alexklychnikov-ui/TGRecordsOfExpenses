@@ -174,10 +174,11 @@ def aggregate_category2_by_category1(records: list[dict], category1_value: str) 
     for item in records:
         if _normalize_text(item.get("category1")) != target:
             continue
-        group_name = (item.get("category2") or "Без категории2").strip()
+        raw_group_name = (item.get("category2") or "Без категории2").strip()
+        group_key = _normalize_text(raw_group_name)
         bucket = grouped.setdefault(
-            group_name,
-            {"group_name": group_name, "count": 0, "total": 0.0, "cheque_ids": set()},
+            group_key,
+            {"group_name": raw_group_name, "count": 0, "total": 0.0, "cheque_ids": set()},
         )
         bucket["count"] += 1
         try:
@@ -232,6 +233,7 @@ NEW_CHEQUE_DATE_PREFIX = "new_cheque_date_"
 NEW_CHEQUE_DATE_TODAY = "new_cheque_date_today"
 NEW_CHEQUE_DATE_YESTERDAY = "new_cheque_date_yesterday"
 NEW_CHEQUE_DATE_CUSTOM = "new_cheque_date_custom"
+SHOW_CHEQUE_PREFIX = "show_cheque_"
 
 
 def build_pending_actions_keyboard() -> InlineKeyboardMarkup:
@@ -293,6 +295,32 @@ def build_cheque_actions_keyboard() -> InlineKeyboardMarkup:
         ]
     ]
     
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def build_cheque_list_keyboard(purchases: list[Dict], limit: int = 30) -> InlineKeyboardMarkup:
+    grouped = {}
+    order = []
+    for p in purchases:
+        cid = p.get("chequeid")
+        if cid is None:
+            continue
+        if cid not in grouped:
+            grouped[cid] = {
+                "sum": 0.0,
+                "date": p.get("date", "N/A"),
+            }
+            order.append(cid)
+        grouped[cid]["sum"] += float(p.get("price", 0) or 0)
+    keyboard = []
+    for cid in order[:limit]:
+        g = grouped[cid]
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"🧾 {g['date']} · Чек {cid} · {g['sum']:.2f} ₽",
+                callback_data=f"{SHOW_CHEQUE_PREFIX}{cid}"
+            )
+        ])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
@@ -714,8 +742,8 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
                 result,
                 username,
             )
-            summary = f"📅 За прошлый месяц ({start_date} - {end_date}):\n\n"
-            text = "" if (need_excel or need_chart) else summary + report_builder.format_purchases_list(result)
+            text = "" if (need_excel or need_chart) else report_builder.format_cheque_totals(result)
+            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -733,8 +761,8 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
                 result,
                 username,
             )
-            summary = f"📅 За прошлый год ({start_date} - {end_date}):\n\n"
-            text = "" if (need_excel or need_chart) else summary + report_builder.format_purchases_list(result)
+            text = "" if (need_excel or need_chart) else report_builder.format_cheque_totals(result)
+            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -753,7 +781,8 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
                 result,
                 username,
             )
-            text = "" if (need_excel or need_chart) else report_builder.format_purchases_list(result)
+            text = "" if (need_excel or need_chart) else report_builder.format_cheque_totals(result)
+            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -902,7 +931,8 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
         
         elif tool_name == "fetch_by_category":
             result = ai_db.fetch_by_category(**arguments)
-            text = report_builder.format_purchases_list(result)
+            text = report_builder.format_cheque_totals(result)
+            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -912,7 +942,8 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
         
         elif tool_name == "fetch_by_organization":
             result = ai_db.fetch_by_organization(**arguments)
-            text = report_builder.format_purchases_list(result)
+            text = report_builder.format_cheque_totals(result)
+            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -922,7 +953,8 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
         
         elif tool_name == "fetch_by_product_name":
             result = ai_db.fetch_by_product_name(**arguments)
-            text = report_builder.format_purchases_list(result)
+            text = report_builder.format_cheque_totals(result)
+            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -932,7 +964,8 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
         
         elif tool_name == "fetch_by_description":
             result = ai_db.fetch_by_description(**arguments)
-            text = report_builder.format_purchases_list(result)
+            text = report_builder.format_cheque_totals(result)
+            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -2158,6 +2191,41 @@ async def callback_new_cheque_add_item(call: CallbackQuery):
     await call.answer()
 
 
+@dp.callback_query(F.data.startswith(SHOW_CHEQUE_PREFIX))
+async def callback_show_cheque(call: CallbackQuery):
+    user_id = call.from_user.id
+    username_raw = call.from_user.username
+    username = username_raw if username_raw else f"user_{user_id}"
+    data = call.data or ""
+    cid_part = data.replace(SHOW_CHEQUE_PREFIX, "")
+    try:
+        chequeid = int(cid_part)
+    except Exception:
+        await call.answer("Некорректный номер чека", show_alert=True)
+        return
+    
+    records = ai_db.get_cheque_by_id(chequeid, username)
+    if not records:
+        await call.answer("Чек не найден", show_alert=True)
+        return
+    
+    context_manager.set_last_cheque(user_id, chequeid)
+    text = report_builder.format_cheque(records)
+    
+    photo_path = records[0].get("file_path")
+    if photo_path and os.path.exists(photo_path):
+        try:
+            photo = FSInputFile(photo_path)
+            await call.message.answer_photo(photo, caption=text)
+            await call.answer()
+            return
+        except Exception:
+            pass
+    
+    await call.message.answer(text)
+    await call.answer()
+
+
 @dp.message(F.text)
 async def handle_text(message: Message):
     user_id = message.from_user.id
@@ -2471,6 +2539,44 @@ async def handle_text(message: Message):
     excel_keywords = ["эксель", "excel", "таблица", "таблицу"]
     need_excel = any(keyword in user_lower for keyword in excel_keywords)
     need_chart = "график" in user_lower
+
+    # Если запрошен только график (без явных новых условий) — используем кеш последней группировки
+    if need_chart:
+        last_query = context_manager.get_last_query(user_id)
+        if last_query and last_query.get("result"):
+            query_type = last_query.get("type", "")
+            # признаки новой группировки в тексте
+            has_new_filters = any(key in user_lower for key in ("категор", "category", "организац", "organization", "описан", "description"))
+            if not has_new_filters and (query_type.startswith("get_grouped") or query_type == "get_grouped_stats_filtered"):
+                result = last_query.get("result", [])
+                params = last_query.get("params", {}) or {}
+                field = params.get("field")
+                field_map = {
+                    "get_grouped_by_category1": "category1",
+                    "get_grouped_by_category2": "category2",
+                    "get_grouped_by_category3": "category3",
+                    "get_grouped_by_organization": "organization",
+                    "get_grouped_by_description": "description",
+                    "get_grouped_stats_filtered": field,
+                }
+                chart_field = field_map.get(query_type, field or "category1")
+                if result and chart_field:
+                    try:
+                        chart_buf = create_pie_chart(result, chart_field)
+                        chart_path = os.path.join(DB_DIR, f"chart_{user_id}.png")
+                        with open(chart_path, "wb") as f:
+                            f.write(chart_buf.read())
+                        chart_file = FSInputFile(chart_path)
+                        await message.answer_photo(chart_file)
+                        try:
+                            os.remove(chart_path)
+                        except Exception:
+                            pass
+                        return
+                    except Exception as e:
+                        logger.error(f"Failed quick-chart from cache: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
     
     single_day_match = re.search(r"покажи\s+все\s+чеки\s+за\s+(\d{2}\.\d{2}\.\d{4})", user_message, flags=re.IGNORECASE)
     if single_day_match:
@@ -2492,45 +2598,40 @@ async def handle_text(message: Message):
             result,
             username,
         )
-        if result:
-            purchases_text = report_builder.format_purchases_list(result, limit=len(result))
-        else:
-            purchases_text = "Записей не найдено"
-        final_response = f"📅 Чеки за {date_str}:\n\n{purchases_text}"
+        final_response = f"📅 Чеки за {date_str}:\n\n{report_builder.format_cheque_totals(result)}"
+        kb = build_cheque_list_keyboard(result)
         context_manager.add_message(user_id, "assistant", final_response)
-        await message.answer(final_response, parse_mode=None)
+        await message.answer(final_response, parse_mode=None, reply_markup=kb)
         return
     
-    # Явный запрос группировки по category1 (без уточнения category2) - проверяем ПЕРВЫМ
-    has_category = ("категор" in user_lower or "category" in user_lower)
-    has_category1 = (re.search(r"категор\w*\s*1", user_lower) or "category1" in user_lower)
-    has_stats_keyword = ("статист" in user_lower or "групп" in user_lower or "итог" in user_lower)
-    
-    if has_category and has_category1 and has_stats_keyword:
-        start_date, end_date = resolve_period_for_message(user_id, user_message)
-        start_date, end_date = normalize_to_current_month_if_same_month_wrong_year(start_date, end_date)
-        result = ai_db.get_grouped_stats("category1", start_date, end_date, username)
+    # Явный запрос по организации (подстрочное совпадение)
+    org_match = re.search(
+        r"(?:организаци[яеи]|organization)\s+([^\n\r]+)",
+        user_message,
+        flags=re.IGNORECASE,
+    )
+    org_value = None
+    if org_match:
+        org_value = org_match.group(1).strip()
+        org_value = org_value.strip(' "\'«»')
+    if org_value:
+        result = ai_db.fetch_by_organization(org_value, username)
         context_manager.set_last_query(
             user_id,
-            "get_grouped_by_category1",
-            {"start_date": start_date, "end_date": end_date, "field": "category1"},
+            "fetch_by_organization",
+            {"organization": org_value},
             result,
             username,
         )
-        if result:
-            final_response = (
-                f"📊 Группировка по category1 за период {start_date} - {end_date}:\n\n"
-                f"{report_builder.format_grouped_stats(result, 'category1')}"
-            )
-        else:
-            final_response = f"Нет данных по category1 за период {start_date} - {end_date}"
+        final_response = report_builder.format_cheque_totals(result)
+        kb = build_cheque_list_keyboard(result)
         context_manager.add_message(user_id, "assistant", final_response)
-        await message.answer(final_response, parse_mode=None)
+        await message.answer(final_response, parse_mode=None, reply_markup=kb)
         return
     
     # Обработка запросов с указанием конкретного значения category1 (для группировки category2)
     grouped_category_match = re.search(
-        r"покажи.*категор(?:ия|и|ий|ию|ией)2.*категор(?:ия|и|ий|ию|ией)1\s+(.+)",
+        r"категор(?:ия|и|ий|ию|ией)2.*категор(?:ия|и|ий|ию|ией)1\s+(.+)",
         user_message,
         flags=re.IGNORECASE | re.DOTALL,
     )
@@ -2539,31 +2640,29 @@ async def handle_text(message: Message):
         category1_value = grouped_category_match.group(1).strip()
         category1_value = category1_value.splitlines()[0].strip()
         category1_value = category1_value.strip(' "\'«»')
-    elif (
-        ("категор" in user_lower or "category" in user_lower)
-        and (re.search(r"категор\w*\s*1", user_lower) or "category1" in user_lower)
-        and not ("статист" in user_lower or "групп" in user_lower or "итог" in user_lower)
-    ):
-        idx = user_lower.rfind("категория1")
-        key_len = len("категория1")
-        if idx == -1:
-            idx = user_lower.rfind("category1")
-            key_len = len("category1")
-        if idx == -1:
-            # попробуем найти по regex катеgor* 1
-            regex_match = re.search(r"категор\w*\s*1", user_lower)
-            if regex_match:
-                idx = regex_match.end()
-                key_len = 0
-        if idx != -1:
-            value_part = user_message[idx + key_len :]
-            value_part = value_part.replace("=", " ").replace(":", " ")
-            category1_candidate = value_part.strip()
-            if category1_candidate:
-                category1_candidate = category1_candidate.splitlines()[0].strip()
-                category1_candidate = category1_candidate.strip(' "\'«»')
-            if category1_candidate:
-                category1_value = category1_candidate
+    else:
+        cat2_present = re.search(r"категор\w*2|category2", user_lower)
+        cat1_present = re.search(r"категор\w*1|category1", user_lower)
+        if cat2_present and cat1_present:
+            idx = user_lower.rfind("категория1")
+            key_len = len("категория1")
+            if idx == -1:
+                idx = user_lower.rfind("category1")
+                key_len = len("category1")
+            if idx == -1:
+                regex_match = re.search(r"категор\w*\s*1", user_lower)
+                if regex_match:
+                    idx = regex_match.end()
+                    key_len = 0
+            if idx != -1:
+                value_part = user_message[idx + key_len :]
+                value_part = value_part.replace("=", " ").replace(":", " ")
+                category1_candidate = value_part.strip()
+                if category1_candidate:
+                    category1_candidate = category1_candidate.splitlines()[0].strip()
+                    category1_candidate = category1_candidate.strip(' "\'«»')
+                if category1_candidate:
+                    category1_value = category1_candidate
     if category1_value:
         start_date, end_date = resolve_period_for_message(user_id, user_message)
         dataset = []
@@ -2596,6 +2695,85 @@ async def handle_text(message: Message):
                 f"Нет данных для category2 при category1 = '{category1_value}' "
                 f"за период {start_date} - {end_date}"
             )
+        context_manager.add_message(user_id, "assistant", final_response)
+        await message.answer(final_response, parse_mode=None)
+        return
+    
+    # Запрос всех позиций по category2 без уточнения category1: "категория 2 Шоколад"
+    cat2_only_match = re.search(
+        r"категор(?:ия|и|ий|ию|ией)?\s*2\s+(.+)",
+        user_message,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if cat2_only_match and ("категор" not in user_lower or ("категор" in user_lower and "категория1" not in user_lower)):
+        category2_value = cat2_only_match.group(1).strip().splitlines()[0].strip(' "\'«»')
+        if category2_value:
+            start_date, end_date = resolve_period_for_message(user_id, user_message)
+            dataset = []
+            last_query = context_manager.get_last_query(user_id)
+            if (
+                last_query
+                and last_query.get("type") == "fetch_by_period"
+                and last_query.get("params", {}).get("start_date") == start_date
+                and last_query.get("params", {}).get("end_date") == end_date
+                and last_query.get("username") == username
+            ):
+                dataset = last_query.get("result", []) or []
+            if not dataset:
+                dataset = ai_db.fetch_by_period(start_date, end_date, username)
+                context_manager.set_last_query(
+                    user_id,
+                    "fetch_by_period",
+                    {"start_date": start_date, "end_date": end_date},
+                    dataset,
+                    username,
+                )
+            
+            target = _normalize_text(category2_value)
+            filtered = [
+                item for item in dataset
+                if _normalize_text(item.get("category2")) == target
+            ]
+            
+            context_manager.set_last_query(
+                user_id,
+                "fetch_by_category2_positions",
+                {"start_date": start_date, "end_date": end_date, "category2": category2_value},
+                filtered,
+                username,
+            )
+            
+            if filtered:
+                final_response = report_builder.format_purchases_list(filtered, limit=50)
+            else:
+                final_response = f"Нет позиций с category2 = '{category2_value}' за период {start_date} - {end_date}"
+            context_manager.add_message(user_id, "assistant", final_response)
+            await message.answer(final_response, parse_mode=None)
+            return
+    
+    # Явный запрос группировки по category1 (без уточнения category2)
+    has_category = ("категор" in user_lower or "category" in user_lower)
+    has_category1 = (re.search(r"категор\w*\s*1", user_lower) or "category1" in user_lower)
+    has_stats_keyword = ("статист" in user_lower or "групп" in user_lower or "итог" in user_lower or "сумм" in user_lower)
+    
+    if has_category and has_category1 and has_stats_keyword:
+        start_date, end_date = resolve_period_for_message(user_id, user_message)
+        start_date, end_date = normalize_to_current_month_if_same_month_wrong_year(start_date, end_date)
+        result = ai_db.get_grouped_stats("category1", start_date, end_date, username)
+        context_manager.set_last_query(
+            user_id,
+            "get_grouped_by_category1",
+            {"start_date": start_date, "end_date": end_date, "field": "category1"},
+            result,
+            username,
+        )
+        if result:
+            final_response = (
+                f"📊 Группировка по category1 за период {start_date} - {end_date}:\n\n"
+                f"{report_builder.format_grouped_stats(result, 'category1')}"
+            )
+        else:
+            final_response = f"Нет данных по category1 за период {start_date} - {end_date}"
         context_manager.add_message(user_id, "assistant", final_response)
         await message.answer(final_response, parse_mode=None)
         return
@@ -2665,6 +2843,7 @@ async def handle_text(message: Message):
     all_photos = []
     all_excel_paths = []
     all_chart_data = []
+    inline_keyboard = None
     if response.get("tool_calls"):
         tool_results = []
         for tool_call in response["tool_calls"]:
@@ -2679,6 +2858,8 @@ async def handle_text(message: Message):
                 all_excel_paths.append(extra_outputs["excel_path"])
             if extra_outputs.get("chart_data") and extra_outputs.get("chart_field"):
                 all_chart_data.append((extra_outputs["chart_data"], extra_outputs["chart_field"]))
+            if extra_outputs.get("inline_keyboard") and inline_keyboard is None:
+                inline_keyboard = extra_outputs["inline_keyboard"]
         
         final_response = "\n\n".join(tool_results)
         if not final_response:
@@ -2696,48 +2877,30 @@ async def handle_text(message: Message):
     # Если запрошен график, сначала проверяем кеш, если нет - вызываем функцию по умолчанию
     try:
         if need_chart and not all_chart_data:
-            should_refresh = _should_refresh_cache(user_message)
             last_query = context_manager.get_last_query(user_id)
-            if not should_refresh and last_query and last_query.get("type", "").startswith("get_grouped_by"):
-                # Используем данные из кеша
+            if last_query and last_query.get("result"):
+                # Всегда сначала используем кеш последней группировки (в т.ч. с фильтрами)
                 result = last_query.get("result", [])
+                params = last_query.get("params", {}) or {}
+                query_type = last_query.get("type", "")
+                field = params.get("field")
+                field_map = {
+                    "get_grouped_by_category1": "category1",
+                    "get_grouped_by_category2": "category2",
+                    "get_grouped_by_category3": "category3",
+                    "get_grouped_by_organization": "organization",
+                    "get_grouped_by_description": "description",
+                    "get_grouped_stats_filtered": field,
+                }
+                chart_field = field_map.get(query_type, field or "category1")
+                if result and chart_field:
+                    all_chart_data.append((result, chart_field))
+            # Если в кеше нет данных для графика — используем дефолт (category1 за текущий месяц)
+            if not all_chart_data:
+                start_date, end_date = get_current_month()
+                result = ai_db.get_grouped_stats("category1", start_date, end_date, username)
                 if result:
-                    field_map = {
-                        "get_grouped_by_category1": "category1",
-                        "get_grouped_by_category2": "category2",
-                        "get_grouped_by_category3": "category3",
-                        "get_grouped_by_organization": "organization",
-                        "get_grouped_by_description": "description"
-                    }
-                    query_type = last_query.get("type", "")
-                    chart_field = field_map.get(query_type, last_query.get("params", {}).get("field"))
-                    if chart_field:
-                        all_chart_data.append((result, chart_field))
-            else:
-                if last_query and last_query.get("params"):
-                    params = last_query.get("params", {})
-                    start_date = params.get("start_date")
-                    end_date = params.get("end_date")
-                    if start_date and end_date:
-                        grouped = ai_db.get_grouped_stats("category1", start_date, end_date, username)
-                        if grouped:
-                            context_manager.set_last_query(
-                                user_id,
-                                "get_grouped_by_category1",
-                                {"start_date": start_date, "end_date": end_date, "field": "category1"},
-                                grouped,
-                                username,
-                            )
-                            all_chart_data.append((grouped, "category1"))
-                if not all_chart_data:
-                    # Кеша нет - вызываем функцию группировки по умолчанию (category1 за текущий месяц)
-                    start_date, end_date = get_current_month()
-                    result = ai_db.get_grouped_stats("category1", start_date, end_date, username)
-                    if result:
-                        context_manager.set_last_query(user_id, "get_grouped_by_category1", 
-                                                      {"start_date": start_date, "end_date": end_date, "field": "category1"}, 
-                                                      result, username)
-                        all_chart_data.append((result, "category1"))
+                    all_chart_data.append((result, "category1"))
     except Exception as chart_err:
         logger.error(f"Error in chart processing: {chart_err}")
         import traceback
@@ -2759,7 +2922,7 @@ async def handle_text(message: Message):
     if final_response:
         try:
             context_manager.add_message(user_id, "assistant", final_response)
-            await message.answer(final_response, parse_mode=None)
+            await message.answer(final_response, parse_mode=None, reply_markup=inline_keyboard)
         except Exception as send_err:
             logger.error(f"Failed to send text response: {send_err}")
             import traceback

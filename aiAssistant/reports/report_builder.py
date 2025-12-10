@@ -56,8 +56,9 @@ class ReportBuilder:
             total_sum += price
             date = item.get("date", "N/A")
             org = item.get("organization", "N/A")[:30]
+            cid = item.get("chequeid", "N/A")
             
-            result += f"• {name}\n"
+            result += f"• #{cid} {name}\n"
             result += f"  💰 {price:.2f} ₽ | 📅 {date} | 🏪 {org}\n\n"
         
         if total_count > limit:
@@ -65,6 +66,44 @@ class ReportBuilder:
         
         result += f"💳 **Сумма (первые {len(display_items)}): {total_sum:.2f} ₽**"
         
+        return result
+
+    @staticmethod
+    def format_cheque_totals(purchases: List[Dict], limit: int = 20) -> str:
+        """
+        Группировка позиций по номерам чеков: дата чека, номер чека, сумма чека.
+        """
+        if not purchases:
+            return "Записей не найдено"
+
+        groups = {}
+        order = []
+        for p in purchases:
+            cid = p.get("chequeid")
+            if cid not in groups:
+                groups[cid] = {
+                    "sum": 0.0,
+                    "date": p.get("date", "N/A"),
+                    "chequeid": cid or "N/A",
+                }
+                order.append(cid)
+            price = float(p.get("price", 0) or 0)
+            groups[cid]["sum"] += price
+
+        total_cheques = len(groups)
+        display_ids = order[:limit]
+
+        lines = []
+        for cid in display_ids:
+            g = groups[cid]
+            lines.append(f"• 📅 {g['date']} | 🧾 {g['chequeid']} | 💳 {g['sum']:.2f} ₽")
+
+        result = f"📊 **Найдено чеков: {total_cheques}**\n\n"
+        result += "\n".join(lines)
+
+        if total_cheques > limit:
+            result += f"\n\n... и ещё {total_cheques - limit} чеков"
+
         return result
     
     @staticmethod
