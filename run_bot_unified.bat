@@ -1,28 +1,14 @@
 @echo off
-setlocal
-
-rem Change to project directory
 cd /d "%~dp0"
 
-rem Activate local venv if it exists
-if exist ".venv\Scripts\activate.bat" (
-    call ".venv\Scripts\activate.bat"
+set "LOG_FILE=%~dp0run_bot_unified.log"
+
+echo [START] %date% %time% >> "%LOG_FILE%"
+
+if exist ".venv\Scripts\pythonw.exe" (
+    start "" ".venv\Scripts\pythonw.exe" bot_unified.py
+    echo [INFO] Started via pythonw.exe >> "%LOG_FILE%"
+) else (
+    start "" /min python bot_unified.py
+    echo [INFO] Started via python >> "%LOG_FILE%"
 )
-
-rem Prefer pythonw (no console); fallback to python
-set "PY_CMD="
-for %%P in (pythonw.exe python.exe) do (
-    where %%P >nul 2>&1
-    if not errorlevel 1 (
-        set "PY_CMD=%%P"
-        goto launch
-    )
-)
-echo [ERROR] Python interpreter not found in PATH.
-timeout /t 5 >nul
-exit /b 1
-
-:launch
-start "" /min "%PY_CMD%" bot_unified.py
-endlocal
-
