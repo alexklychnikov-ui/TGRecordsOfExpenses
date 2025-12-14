@@ -18,4 +18,5 @@
 2025-12-11 14:25  run_bot_unified.bat: убран PowerShell, снова start /min cmd /V:ON с pushd, python.exe в приоритете, pythonw запас; пишем [EXIT code N]. Промт: «не работает @run_bot_unified.log».
 2025-12-11 14:30  run_bot_unified.bat: упростил старт — start /min cmd /c pushd && python -u ... >> лог; убрал echo EXIT, чтобы не мешал async процессу. Промт: «@run_bot_unified.log мы ходим по кругу».
 2025-12-11 15:00  run_bot_unified.bat: радикальное упрощение — start "" pythonw.exe bot_unified.py без cmd /c и редиректов; pythonw не создаёт окно. Промт: «сделай чтобы батник запускал бота и окно cmd исчезало как можно проще».
+2025-12-14 16:01  Модуль экономии переведён на GPT-5: добавлен параметр model в AIClient.__init__, aiAssistent_economy/analyzer.py создаёт отдельный клиент с model="gpt-5". Парсер чеков остался на gpt-4o-mini. Промт: «переделай на работу с gtp-5 только второго промта (экономия)».
 
