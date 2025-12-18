@@ -71,7 +71,7 @@ class ReportBuilder:
     @staticmethod
     def format_cheque_totals(purchases: List[Dict], limit: int = 20) -> str:
         """
-        Группировка позиций по номерам чеков: дата чека, номер чека, сумма чека.
+        Группировка позиций по номерам чеков: дата чека, номер чека, сумма чека, организация.
         """
         if not purchases:
             return "Записей не найдено"
@@ -85,6 +85,7 @@ class ReportBuilder:
                     "sum": 0.0,
                     "date": p.get("date", "N/A"),
                     "chequeid": cid or "N/A",
+                    "organization": p.get("organization", "N/A"),
                 }
                 order.append(cid)
             price = float(p.get("price", 0) or 0)
@@ -96,7 +97,7 @@ class ReportBuilder:
         lines = []
         for cid in display_ids:
             g = groups[cid]
-            lines.append(f"• 📅 {g['date']} | 🧾 {g['chequeid']} | 💳 {g['sum']:.2f} ₽")
+            lines.append(f"• 📅 {g['date']} | 🧾 {g['chequeid']} | 💳 {g['sum']:.2f} ₽ | 🏪 {g['organization']}")
 
         result = f"📊 **Найдено чеков: {total_cheques}**\n\n"
         result += "\n".join(lines)

@@ -2,3 +2,4 @@
 .venv/
 test_receipts.db
 .dbData/
+.chequeData/

@@ -32,6 +32,7 @@ from openai import OpenAI
 
 from aiAssistant.core.context_manager import ContextManager
 from aiAssistant.core.ai_client import AIClient
+from utils.api_logger import get_api_logger
 from aiAssistant.core.date_helpers import (
     get_last_n_days,
     get_current_week,
@@ -309,6 +310,7 @@ def build_cheque_list_keyboard(purchases: list[Dict], limit: int = 30) -> Inline
             grouped[cid] = {
                 "sum": 0.0,
                 "date": p.get("date", "N/A"),
+                "organization": p.get("organization", "N/A"),
             }
             order.append(cid)
         grouped[cid]["sum"] += float(p.get("price", 0) or 0)
@@ -317,7 +319,7 @@ def build_cheque_list_keyboard(purchases: list[Dict], limit: int = 30) -> Inline
         g = grouped[cid]
         keyboard.append([
             InlineKeyboardButton(
-                text=f"🧾 {g['date']} · Чек {cid} · {g['sum']:.2f} ₽",
+                text=f"🧾 {g['date']} · Чек {cid} · {g['sum']:.2f} ₽ · {g['organization']}",
                 callback_data=f"{SHOW_CHEQUE_PREFIX}{cid}"
             )
         ])
@@ -642,19 +644,87 @@ def refresh_last_query(user_id: int, username: str, context_manager: ContextMana
     return message
 
 
-def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: int, user_message: str = "", need_excel: bool = False, need_chart: bool = False) -> tuple[str, list, dict]:
+def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: int, user_message: str = "", need_excel: bool = False, need_chart: bool = False, show_as_cheques: Optional[bool] = None) -> tuple[str, list, dict]:
+    """
+    Выполняет вызов функции БД и форматирует результат.
+
+    Args:
+        show_as_cheques:
+            - True: показать чеки с inline-меню (format_cheque_totals)
+            - False: показать позиции списком (format_purchases_list)
+            - None: умный дефолт (зависит от функции)
+    """
+
+    def _should_show_as_cheques(tool_name: str, arguments: dict) -> bool:
+        """
+        Умные дефолты: определяет формат вывода по типу функции.
+
+        Логика:
+        - Малые периоды (вчера, 3-7 дней) → позиции (детальный список)
+        - Большие периоды (месяц, год) → чеки (удобнее навигация)
+        - Поиск (организация, товар, категория) → чеки (для выбора)
+        """
+        # Малые периоды - показываем позиции (детально)
+        if tool_name in ("get_yesterday", "get_last_n_days"):
+            # Если последние N дней <= 7, показываем позиции
+            if tool_name == "get_yesterday":
+                return False  # Позиции
+            n = arguments.get("n", 7)
+            return n > 7  # Позиции если <= 7 дней, чеки если больше
+
+        if tool_name in ("get_current_week",):
+            return False  # Позиции (обычно мало данных)
+
+        # Большие периоды - показываем чеки (удобнее)
+        if tool_name in ("get_current_month", "get_previous_month", "get_previous_year", "fetch_by_period"):
+            return True  # Чеки
+
+        # Поиск/фильтрация - показываем чеки (для выбора конкретного)
+        if tool_name in ("fetch_by_category", "fetch_by_organization", "fetch_by_product_name", "fetch_by_description"):
+            return True  # Чеки
+
+        # По умолчанию - чеки (универсально)
+        return True
+
     try:
         if "username" not in arguments:
             arguments["username"] = username
-        
-        
+
+        # Определяем финальный формат вывода
+        if show_as_cheques is None:
+            # Используем умный дефолт
+            use_cheque_format = _should_show_as_cheques(tool_name, arguments)
+        else:
+            # Используем явно указанный формат
+            use_cheque_format = show_as_cheques
+
         photos_to_send = []
         extra_outputs = {
             "excel_path": None,
             "chart_data": None,
             "chart_field": None
         }
-        
+
+        def format_result(result: list, summary: str = "") -> str:
+            """
+            Форматирует результат в зависимости от use_cheque_format.
+
+            Args:
+                result: список записей из БД
+                summary: заголовок/описание (например, "За последние 7 дней:")
+
+            Returns:
+                Отформатированная строка
+            """
+            if use_cheque_format:
+                # Чеки с inline-меню
+                text = report_builder.format_cheque_totals(result)
+                extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
+                return summary + text if summary else text
+            else:
+                # Позиции списком
+                return summary + report_builder.format_purchases_list(result) if summary else report_builder.format_purchases_list(result)
+
         def normalize_period_to_current_month(start_date: str, end_date: str) -> tuple[str, str]:
             """Нормализует период к текущему месяцу, если месяц/год не совпадают."""
             if not start_date or not end_date:
@@ -681,7 +751,7 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
             start_date, end_date = get_last_n_days(n)
             result = ai_db.fetch_by_period(start_date, end_date, username)
             summary = f"📅 За последние {n} дней ({start_date} - {end_date}):\n\n"
-            text = summary + report_builder.format_purchases_list(result)
+            text = "" if (need_excel or need_chart) else format_result(result, summary)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -693,7 +763,7 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
             start_date, end_date = get_current_week()
             result = ai_db.fetch_by_period(start_date, end_date, username)
             summary = f"📅 За текущую неделю ({start_date} - {end_date}):\n\n"
-            text = summary + report_builder.format_purchases_list(result)
+            text = "" if (need_excel or need_chart) else format_result(result, summary)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -705,7 +775,7 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
             start_date, end_date = get_current_month()
             result = ai_db.fetch_by_period(start_date, end_date, username)
             summary = f"📅 За текущий месяц ({start_date} - {end_date}):\n\n"
-            text = summary + report_builder.format_purchases_list(result)
+            text = "" if (need_excel or need_chart) else format_result(result, summary)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -724,7 +794,7 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
                 username,
             )
             summary = f"📅 За вчера ({start_date}):\n\n"
-            text = "" if (need_excel or need_chart) else summary + report_builder.format_purchases_list(result)
+            text = "" if (need_excel or need_chart) else format_result(result, summary)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -742,8 +812,8 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
                 result,
                 username,
             )
-            text = "" if (need_excel or need_chart) else report_builder.format_cheque_totals(result)
-            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
+            summary = f"📅 За прошлый месяц ({start_date} - {end_date}):\n\n"
+            text = "" if (need_excel or need_chart) else format_result(result, summary)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -761,8 +831,8 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
                 result,
                 username,
             )
-            text = "" if (need_excel or need_chart) else report_builder.format_cheque_totals(result)
-            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
+            summary = f"📅 За прошлый год ({start_date} - {end_date}):\n\n"
+            text = "" if (need_excel or need_chart) else format_result(result, summary)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -781,8 +851,8 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
                 result,
                 username,
             )
-            text = "" if (need_excel or need_chart) else report_builder.format_cheque_totals(result)
-            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
+            summary = f"📅 За период ({start_date} - {end_date}):\n\n"
+            text = "" if (need_excel or need_chart) else format_result(result, summary)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -931,8 +1001,10 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
         
         elif tool_name == "fetch_by_category":
             result = ai_db.fetch_by_category(**arguments)
-            text = report_builder.format_cheque_totals(result)
-            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
+            level = arguments.get("level", "")
+            name = arguments.get("name", "")
+            summary = f"📂 Категория {level}: {name}\n\n"
+            text = "" if (need_excel or need_chart) else format_result(result, summary)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -942,8 +1014,9 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
         
         elif tool_name == "fetch_by_organization":
             result = ai_db.fetch_by_organization(**arguments)
-            text = report_builder.format_cheque_totals(result)
-            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
+            organization = arguments.get("organization", "")
+            summary = f"🏪 Организация: {organization}\n\n"
+            text = "" if (need_excel or need_chart) else format_result(result, summary)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -953,8 +1026,9 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
         
         elif tool_name == "fetch_by_product_name":
             result = ai_db.fetch_by_product_name(**arguments)
-            text = report_builder.format_cheque_totals(result)
-            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
+            product_name = arguments.get("product_name", "")
+            summary = f"🛒 Товар: {product_name}\n\n"
+            text = "" if (need_excel or need_chart) else format_result(result, summary)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -964,8 +1038,9 @@ def execute_tool_call(tool_name: str, arguments: dict, username: str, user_id: i
         
         elif tool_name == "fetch_by_description":
             result = ai_db.fetch_by_description(**arguments)
-            text = report_builder.format_cheque_totals(result)
-            extra_outputs["inline_keyboard"] = build_cheque_list_keyboard(result)
+            description = arguments.get("description", "")
+            summary = f"📝 Комментарий: {description}\n\n"
+            text = "" if (need_excel or need_chart) else format_result(result, summary)
             if need_excel:
                 output_path = os.path.join(DB_DIR, f"Report_{user_id}.xlsx")
                 from config import DB_PATH
@@ -1351,6 +1426,9 @@ async def cmd_start(message: Message):
     await message.answer(
         "Привет! Я твой AI-ассистент по финансам. 💰\n\n"
         "Задай вопрос или пришли фото чека. 📸\n\n"
+        "Команды:\n"
+        "/clear — очистить контекст диалога\n"
+        "/api_stats — показать расходы на API\n\n"
         "Примеры команд:\n"
         "• Покажи последний чек\n"
         "• Покажи чек номер 5\n"
@@ -1365,6 +1443,59 @@ async def cmd_clear(message: Message):
     user_id = message.from_user.id
     context_manager.clear_context(user_id)
     await message.answer("🔄 Контекст диалога очищен")
+
+
+@dp.message(Command("api_stats"))
+async def cmd_api_stats(message: Message):
+    """Показать статистику использования OpenAI API."""
+    from datetime import datetime, timedelta
+
+    api_logger = get_api_logger()
+
+    # Статистика за всё время
+    all_stats = api_logger.get_usage_stats()
+
+    # Статистика за сегодня
+    today_stats = api_logger.get_usage_stats(since=datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+
+    # Статистика за последние 7 дней
+    week_stats = api_logger.get_usage_stats(since=datetime.now() - timedelta(days=7))
+
+    # Формируем ответ
+    response = "📊 **Статистика использования OpenAI API**\n\n"
+
+    # За сегодня
+    response += "📅 **Сегодня:**\n"
+    response += f"  Запросов: {today_stats['total_requests']} (✅ {today_stats['successful_requests']} | ❌ {today_stats['failed_requests']})\n"
+    response += f"  Токенов: {today_stats['total_tokens']:,}\n"
+    response += f"  Стоимость: ${today_stats['total_cost_usd']:.6f}\n\n"
+
+    # За неделю
+    response += "📆 **За 7 дней:**\n"
+    response += f"  Запросов: {week_stats['total_requests']} (✅ {week_stats['successful_requests']} | ❌ {week_stats['failed_requests']})\n"
+    response += f"  Токенов: {week_stats['total_tokens']:,}\n"
+    response += f"  Стоимость: ${week_stats['total_cost_usd']:.6f}\n\n"
+
+    # За всё время
+    response += "🗓️ **Всего:**\n"
+    response += f"  Запросов: {all_stats['total_requests']} (✅ {all_stats['successful_requests']} | ❌ {all_stats['failed_requests']})\n"
+    response += f"  Токенов: {all_stats['total_tokens']:,}\n"
+    response += f"  Стоимость: ${all_stats['total_cost_usd']:.6f}\n\n"
+
+    # По моделям
+    if all_stats['by_model']:
+        response += "🤖 **По моделям:**\n"
+        for model, stats in all_stats['by_model'].items():
+            response += f"  • {model}: {stats['requests']} запросов | ${stats['cost_usd']:.6f}\n"
+        response += "\n"
+
+    # По типам запросов
+    if all_stats['by_type']:
+        response += "🔍 **По типам:**\n"
+        for req_type, stats in all_stats['by_type'].items():
+            response += f"  • {req_type}: {stats['requests']} запросов | ${stats['cost_usd']:.6f}\n"
+
+    await message.answer(response, parse_mode="Markdown")
 
 
 @dp.message(F.photo)
@@ -2540,6 +2671,23 @@ async def handle_text(message: Message):
     need_excel = any(keyword in user_lower for keyword in excel_keywords)
     need_chart = "график" in user_lower
 
+    # Определяем формат вывода: чеки (с inline-меню) или позиции (список)
+    cheque_keywords = ["чек", "чеки", "чека", "чеков", "cheque", "cheques"]
+    position_keywords = ["позиц", "товар", "покупк", "список", "position", "item", "product", "list"]
+
+    show_as_cheques = any(keyword in user_lower for keyword in cheque_keywords)
+    show_as_positions = any(keyword in user_lower for keyword in position_keywords)
+
+    # Приоритет: если явно указаны позиции - показываем позиции
+    # Иначе если явно указаны чеки - показываем чеки
+    # Если ничего не указано - используем умные дефолты (передаем None)
+    if show_as_positions:
+        show_as_cheques_flag = False  # Явно позиции
+    elif show_as_cheques:
+        show_as_cheques_flag = True   # Явно чеки
+    else:
+        show_as_cheques_flag = None   # Дефолт по типу функции
+
     # Если запрошен только график (без явных новых условий) — используем кеш последней группировки
     if need_chart:
         last_query = context_manager.get_last_query(user_id)
@@ -2754,7 +2902,7 @@ async def handle_text(message: Message):
     # Явный запрос группировки по category1 (без уточнения category2)
     has_category = ("категор" in user_lower or "category" in user_lower)
     has_category1 = (re.search(r"категор\w*\s*1", user_lower) or "category1" in user_lower)
-    has_stats_keyword = ("статист" in user_lower or "групп" in user_lower or "итог" in user_lower or "сумм" in user_lower)
+    has_stats_keyword = ("статист" in user_lower or "групп" in user_lower or "итог" in user_lower or "сумм" in user_lower or "трат" in user_lower)
     
     if has_category and has_category1 and has_stats_keyword:
         start_date, end_date = resolve_period_for_message(user_id, user_message)
@@ -2850,7 +2998,7 @@ async def handle_text(message: Message):
             function_name = tool_call.function.name
             function_args = json.loads(tool_call.function.arguments)
             
-            result, photos, extra_outputs = execute_tool_call(function_name, function_args, username, user_id, user_message, need_excel, need_chart)
+            result, photos, extra_outputs = execute_tool_call(function_name, function_args, username, user_id, user_message, need_excel, need_chart, show_as_cheques_flag)
             if result:
                 tool_results.append(result)
             all_photos.extend(photos)
